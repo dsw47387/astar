@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -19,8 +20,11 @@ public class Node
 
 public class AStarPath : MonoBehaviour
 {
-    public GameObject targetObject; // The target GameObject
-    public LayerMask obstacleLayer; // Layer mask to identify obstacles
+    public GameObject targetObject;
+    public GameObject playerObject;
+    public LayerMask obstacleLayer;
+    public GameObject openNodeMarker;
+    public GameObject closedNodeMarker;
 
     private List<Node> _openList;
     private HashSet<Node> _closedList;
@@ -29,29 +33,29 @@ public class AStarPath : MonoBehaviour
     private int _gridWidth;
     private int _gridHeight;
     private int _gridDepth;
+    private bool _isFindingPath;
+    private Node _startNode;
+    private Node _endNode;
+    private Node _currentNode;
+    private List<Node> _path;
 
     void Start()
     {
-        _originPosition = transform.position;
-        Vector3 startPosition = transform.position;
+        _originPosition = playerObject.transform.position;
+        Vector3 startPosition = _originPosition;
         Vector3 endPosition = targetObject.transform.position;
 
         CalculateGridDimensions(startPosition, endPosition);
         InitializeNodes();
 
-        List<Node> path = FindPath(startPosition, endPosition);
-        if (path != null)
-        {
-            foreach (Node node in path)
-            {
-                // Instantiate(pathPrefab, new Vector3(node.position.x, node.position.y, node.position.z), Quaternion.identity);
-                Debug.Log(node.position);
-            }
-        }
-        else
-        {
-            Debug.Log("No path found!");
-        }
+        _startNode = _nodes[WorldToGridPosition(startPosition).x, WorldToGridPosition(startPosition).y, WorldToGridPosition(startPosition).z];
+        _endNode = _nodes[WorldToGridPosition(endPosition).x, WorldToGridPosition(endPosition).y, WorldToGridPosition(endPosition).z];
+
+        _openList = new List<Node> { _startNode };
+        _closedList = new HashSet<Node>();
+
+        _isFindingPath = true;
+        StartCoroutine(FindPathCoroutine());
     }
 
     void CalculateGridDimensions(Vector3 start, Vector3 end)
@@ -71,69 +75,81 @@ public class AStarPath : MonoBehaviour
             {
                 for (int z = 0; z < _gridDepth; z++)
                 {
-                    Vector3 position = _originPosition + new Vector3(x, y, z);
-                    bool isWalkable = IsWalkable(position);
-                    _nodes[x, y, z] = new Node(position, isWalkable);
+                    Vector3 gridPosition = _originPosition + new Vector3(x, y, z);
+                    _nodes[x, y, z] = new Node(gridPosition, IsWalkable(gridPosition));
                 }
             }
         }
     }
 
-    bool IsWalkable(Vector3 position)
+    bool IsWalkable(Vector3 gridPosition)
     {
-        // Use a raycast to check if there is an obstacle at the given position
-        if (Physics.Raycast(position + Vector3.up * 0.5f, Vector3.down, 1f, obstacleLayer))
-        {
-            return false;
-        }
-        return true;
+        return !Physics.Raycast(gridPosition + Vector3.up * 2f, Vector3.down, 2f, obstacleLayer);
     }
 
-    List<Node> FindPath(Vector3 start, Vector3 end)
+    IEnumerator FindPathCoroutine()
     {
-        // Convert start and end positions to grid coordinates relative to _originPosition
-        Vector3Int startGridPos = WorldToGridPosition(start);
-        Vector3Int endGridPos = WorldToGridPosition(end);
-
-        Node startNode = _nodes[startGridPos.x, startGridPos.y, startGridPos.z];
-        Node endNode = _nodes[endGridPos.x, endGridPos.y, endGridPos.z];
-
-        _openList = new List<Node> { startNode };
-        _closedList = new HashSet<Node>();
-
-        while (_openList.Count > 0)
+        while (_openList.Count > 0 && _isFindingPath)
         {
-            Node currentNode = GetLowestFCostNode(_openList);
-            if (currentNode == endNode)
+            _currentNode = GetLowestFCostNode(_openList);
+            if (_currentNode == _endNode)
             {
-                return RetracePath(startNode, endNode);
+                _isFindingPath = false;
+                _path = RetracePath(_startNode, _endNode);
+                Debug.Log("Path found!");
+                StartCoroutine(MovePlayerAlongPath());
+                yield break;
             }
 
-            _openList.Remove(currentNode);
-            _closedList.Add(currentNode);
+            _openList.Remove(_currentNode);
+            _closedList.Add(_currentNode);
+            Instantiate(closedNodeMarker, _currentNode.position, Quaternion.identity);
 
-            foreach (Node neighbor in GetNeighbors(currentNode))
+            foreach (Node neighbor in GetNeighbors(_currentNode))
             {
                 if (!neighbor.isWalkable || _closedList.Contains(neighbor))
                 {
                     continue;
                 }
 
-                float newMovementCostToNeighbor = currentNode.gCost + GetDistance(currentNode, neighbor);
+                float newMovementCostToNeighbor = _currentNode.gCost + GetDistance(_currentNode, neighbor);
                 if (!(newMovementCostToNeighbor < neighbor.gCost) && _openList.Contains(neighbor)) continue;
 
                 neighbor.gCost = newMovementCostToNeighbor;
-                neighbor.hCost = GetDistance(neighbor, endNode);
-                neighbor.parent = currentNode;
+                neighbor.hCost = GetDistance(neighbor, _endNode);
+                neighbor.parent = _currentNode;
 
                 if (!_openList.Contains(neighbor))
                 {
                     _openList.Add(neighbor);
+                    Instantiate(openNodeMarker, neighbor.position, Quaternion.identity);
                 }
             }
-        }
 
-        return null;
+            yield return new WaitForSeconds(0.05f);
+        }
+        Debug.Log("No path found!");
+    }
+
+    IEnumerator MovePlayerAlongPath()
+    {
+        foreach (Node node in _path)
+        {
+            Vector3 startPosition = playerObject.transform.position;
+            Vector3 endPosition = node.position;
+            float elapsedTime = 0;
+            float duration = .1f;
+
+            while (elapsedTime < duration)
+            {
+                playerObject.transform.position = Vector3.Lerp(startPosition, endPosition, elapsedTime / duration);
+                elapsedTime += Time.deltaTime;
+                yield return null;
+            }
+
+            playerObject.transform.position = endPosition;
+            yield return new WaitForSeconds(.1f);
+        }
     }
 
     Node GetLowestFCostNode(List<Node> nodeList)
